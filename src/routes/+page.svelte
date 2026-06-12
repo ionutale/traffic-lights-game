@@ -2,21 +2,18 @@
   import { onMount } from 'svelte';
   import { createGameEngine } from '$lib/game/engine.js';
   import { initAudio, updateEngineSound, playSwapSound, playCrashSound, playLevelUpSound } from '$lib/game/audio.js';
-  import { LEVELS } from '$lib/game/levels.js';
+  import { LEVELS, LOGICAL_WIDTH, LOGICAL_HEIGHT } from '$lib/game/levels.js';
 
   let canvasEl = $state();
   let containerEl = $state();
-  let engine = $state(createGameEngine());
+  let engine = createGameEngine();
   let score = $state(0);
   let currentLevel = $state(1);
   let gameState = $state('START');
-  let crashPoint = $state(null);
   let rafId;
 
   let scaleX = 1;
   let scaleY = 1;
-  const LOGICAL_WIDTH = 800;
-  const LOGICAL_HEIGHT = 800;
 
   function getTargetForLevel(level) {
     return LEVELS[level] ? LEVELS[level].target : 0;
@@ -44,7 +41,6 @@
     score = s.score;
     currentLevel = s.currentLevel;
     gameState = s.gameState;
-    crashPoint = s.crashPoint;
   }
 
   function resizeCanvas() {
@@ -60,6 +56,8 @@
   }
 
   onMount(() => {
+    const ro = new ResizeObserver(() => resizeCanvas());
+    ro.observe(containerEl);
     resizeCanvas();
     const ctx = canvasEl.getContext('2d');
 
@@ -83,7 +81,10 @@
 
     rafId = requestAnimationFrame(loop);
 
-    return () => cancelAnimationFrame(rafId);
+    return () => {
+      cancelAnimationFrame(rafId);
+      ro.disconnect();
+    };
   });
 </script>
 

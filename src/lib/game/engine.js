@@ -1,8 +1,10 @@
-import { LOGICAL_WIDTH, LOGICAL_HEIGHT, CENTER_X, CENTER_Y, ROAD_WIDTH, LANE_OFFSET, STOP_DISTANCE, LEVELS, PHASES } from './levels.js';
-import { playScreechSound, playScoreSound } from './audio.js';
+import { LOGICAL_WIDTH, LOGICAL_HEIGHT, CENTER_X, CENTER_Y, ROAD_WIDTH, LANE_OFFSET, STOP_DISTANCE } from './geometry.js';
+import { LEVELS } from './levels.js';
+import { PHASES } from './phases.js';
+import { drawCar } from './carRenderer.js';
 
 export class Car {
-  constructor(dir, speedMult) {
+  constructor(dir, speedMult, bus) {
     this.dir = dir;
     this.length = 45;
     this.breadth = 22;
@@ -13,6 +15,7 @@ export class Car {
     this.passedStopLine = false;
     this.decidedToRunYellow = false;
     this.screechCooldown = 0;
+    this.bus = bus;
 
     if (dir === 'E') {
       this.x = -this.length; this.y = CENTER_Y + LANE_OFFSET;
@@ -103,45 +106,15 @@ export class Car {
 
     if (this.screechCooldown > 0) this.screechCooldown--;
     if (oldSpeed - this.speed > this.acceleration * 6 && this.screechCooldown <= 0) {
-      playScreechSound(oldSpeed - this.speed);
+      this.bus.emit('screech', oldSpeed - this.speed);
       this.screechCooldown = 30;
     }
 
     this[axis] += this.speed * forwardSign;
   }
-
-  draw(ctx) {
-    ctx.save();
-    ctx.translate(this.x, this.y);
-    if (this.dir === 'W') ctx.rotate(Math.PI);
-    else if (this.dir === 'S') ctx.rotate(Math.PI / 2);
-    else if (this.dir === 'N') ctx.rotate(-Math.PI / 2);
-
-    ctx.fillStyle = 'rgba(0,0,0,0.3)';
-    ctx.fillRect(-this.length / 2 + 2, -this.breadth / 2 + 5, this.length, this.breadth);
-
-    ctx.fillStyle = this.color;
-    ctx.beginPath();
-    ctx.roundRect(-this.length / 2, -this.breadth / 2, this.length, this.breadth, 4);
-    ctx.fill();
-
-    ctx.fillStyle = '#1e293b';
-    ctx.beginPath(); ctx.roundRect(-this.length / 2 + this.length * 0.6, -this.breadth / 2 + 2, this.length * 0.25, this.breadth - 4, 2); ctx.fill();
-    ctx.beginPath(); ctx.roundRect(-this.length / 2 + this.length * 0.1, -this.breadth / 2 + 2, this.length * 0.15, this.breadth - 4, 1); ctx.fill();
-
-    ctx.fillStyle = '#fef08a';
-    ctx.fillRect(this.length / 2 - 2, -this.breadth / 2 + 2, 2, 4);
-    ctx.fillRect(this.length / 2 - 2, this.breadth / 2 - 6, 2, 4);
-
-    ctx.fillStyle = (this.speed < this.maxSpeed * 0.8 && this.speed > 0) || this.speed === 0 ? '#ff0000' : '#7f1d1d';
-    ctx.fillRect(-this.length / 2, -this.breadth / 2 + 2, 2, 4);
-    ctx.fillRect(-this.length / 2, this.breadth / 2 - 6, 2, 4);
-
-    ctx.restore();
-  }
 }
 
-export function createGameEngine() {
+export function createGameEngine(eventBus) {
   return {
     cars: { N: [], S: [], E: [], W: [] },
     currentPhase: 0,
@@ -150,6 +123,7 @@ export function createGameEngine() {
     currentLevel: 1,
     score: 0,
     gameState: 'START',
+    bus: eventBus,
 
     getState() {
       return {
@@ -160,15 +134,29 @@ export function createGameEngine() {
       };
     },
 
+    getAudioMetrics() {
+      let numCars = 0;
+      let totalSpeed = 0;
+      if (this.gameState === 'PLAYING' || this.gameState === 'LEVEL_UP') {
+        ['N', 'S', 'E', 'W'].forEach(dir => {
+          numCars += this.cars[dir].length;
+          this.cars[dir].forEach(c => totalSpeed += c.speed);
+        });
+      }
+      return { numCars, avgSpeed: numCars > 0 ? totalSpeed / numCars : 0 };
+    },
+
     requestLightSwap() {
       if (this.gameState !== 'PLAYING') return false;
       if (this.currentPhase === 0) {
         this.currentPhase = 1;
         this.lightTimer = 0;
+        this.bus.emit('swap');
         return true;
       } else if (this.currentPhase === 3) {
         this.currentPhase = 4;
         this.lightTimer = 0;
+        this.bus.emit('swap');
         return true;
       }
       return false;
@@ -214,13 +202,13 @@ export function createGameEngine() {
       return null;
     },
 
-    updateLogic() {
+    updateLogic(dt) {
       if (this.gameState !== 'PLAYING') return;
 
       const lvlData = LEVELS[this.currentLevel];
 
       if (PHASES[this.currentPhase].duration !== Infinity) {
-        this.lightTimer++;
+        this.lightTimer += dt;
         if (this.lightTimer >= PHASES[this.currentPhase].duration) {
           this.lightTimer = 0;
           this.currentPhase = (this.currentPhase + 1) % PHASES.length;
@@ -239,7 +227,7 @@ export function createGameEngine() {
             else if (dir === 'N') distFromSpawn = (LOGICAL_HEIGHT + 45) - lastCar.y;
             if (distFromSpawn < 120) canSpawn = false;
           }
-          if (canSpawn) this.cars[dir].push(new Car(dir, lvlData.speedMult));
+          if (canSpawn) this.cars[dir].push(new Car(dir, lvlData.speedMult, this.bus));
         }
       });
 
@@ -258,7 +246,7 @@ export function createGameEngine() {
           if (offScreen) {
             this.cars[dir].shift();
             this.score++;
-            playScoreSound();
+            this.bus.emit('score');
           }
         }
       });
@@ -267,6 +255,7 @@ export function createGameEngine() {
       if (crash) {
         this.crashPoint = crash;
         this.gameState = 'GAME_OVER';
+        this.bus.emit('crash');
         return;
       }
 
@@ -277,6 +266,7 @@ export function createGameEngine() {
           this.currentLevel++;
           this.gameState = 'LEVEL_UP';
         }
+        this.bus.emit('levelUp');
       }
     },
 
@@ -326,7 +316,7 @@ export function createGameEngine() {
       this.drawTrafficLight(ctx, CENTER_X + ROAD_WIDTH / 2 + 35, CENTER_Y - ROAD_WIDTH / 2 - 25, PHASES[this.currentPhase].ew);
 
       ['N', 'S', 'E', 'W'].forEach(dir => {
-        for (let car of this.cars[dir]) car.draw(ctx);
+        for (let car of this.cars[dir]) drawCar(ctx, car);
       });
 
       if (this.crashPoint) {

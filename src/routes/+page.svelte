@@ -1,47 +1,18 @@
 <script>
   import { onMount } from 'svelte';
-  import { createGameEngine } from '$lib/game/engine.js';
-  import { initAudio, updateEngineSound, playSwapSound, playCrashSound, playLevelUpSound } from '$lib/game/audio.js';
-  import { LEVELS, LOGICAL_WIDTH, LOGICAL_HEIGHT } from '$lib/game/levels.js';
+  import { createGameController } from '$lib/game/GameController.js';
+  import { LOGICAL_WIDTH, LOGICAL_HEIGHT } from '$lib/game/geometry.js';
 
   let canvasEl = $state();
   let containerEl = $state();
-  let engine = createGameEngine();
+  let controller = $state(null);
+
   let score = $state(0);
   let currentLevel = $state(1);
   let gameState = $state('START');
-  let rafId;
-
+  let target = $state(0);
   let scaleX = 1;
   let scaleY = 1;
-
-  function getTargetForLevel(level) {
-    return LEVELS[level] ? LEVELS[level].target : 0;
-  }
-
-  function handleLightSwap() {
-    initAudio();
-    if (gameState !== 'PLAYING') return;
-    const swapped = engine.requestLightSwap();
-    if (swapped) playSwapSound();
-  }
-
-  function handleOverlayAction() {
-    initAudio();
-    if (gameState === 'START' || gameState === 'GAME_OVER' || gameState === 'VICTORY') {
-      engine.restart();
-    } else if (gameState === 'LEVEL_UP') {
-      engine.initLevel(engine.currentLevel);
-    }
-    syncState();
-  }
-
-  function syncState() {
-    const s = engine.getState();
-    score = s.score;
-    currentLevel = s.currentLevel;
-    gameState = s.gameState;
-  }
 
   function resizeCanvas() {
     if (!containerEl || !canvasEl) return;
@@ -56,34 +27,34 @@
   }
 
   onMount(() => {
+    controller = createGameController();
+    const engine = controller.getEngine();
+
     const ro = new ResizeObserver(() => resizeCanvas());
     ro.observe(containerEl);
     resizeCanvas();
     const ctx = canvasEl.getContext('2d');
 
-    function loop(timestamp) {
-      engine.updateLogic();
-      syncState();
+    const unsubState = controller.onState(s => {
+      score = s.score;
+      currentLevel = s.currentLevel;
+      gameState = s.gameState;
+      target = s.target;
+    });
 
-      let numCars = 0;
-      let totalSpeed = 0;
-      if (engine.gameState === 'PLAYING' || engine.gameState === 'LEVEL_UP') {
-        ['N', 'S', 'E', 'W'].forEach(dir => {
-          numCars += engine.cars[dir].length;
-          engine.cars[dir].forEach(c => totalSpeed += c.speed);
-        });
-      }
-      updateEngineSound(numCars, numCars > 0 ? totalSpeed / numCars : 0, engine.gameState);
-
+    function drawLoop(timestamp) {
       engine.drawScene(ctx, scaleX, scaleY, timestamp);
-      rafId = requestAnimationFrame(loop);
+      rafId = requestAnimationFrame(drawLoop);
     }
 
-    rafId = requestAnimationFrame(loop);
+    controller.startLoop();
+    let rafId = requestAnimationFrame(drawLoop);
 
     return () => {
-      cancelAnimationFrame(rafId);
+      controller.dispose();
       ro.disconnect();
+      cancelAnimationFrame(rafId);
+      unsubState();
     };
   });
 </script>
@@ -111,7 +82,7 @@
         <div class="w-px bg-slate-700"></div>
         <div class="text-center">
           <p class="text-xs text-slate-400 uppercase tracking-widest font-bold mb-1">Score</p>
-          <p class="text-3xl font-black text-emerald-400 leading-none">{score}<span class="text-lg text-slate-500">/{getTargetForLevel(currentLevel)}</span></p>
+          <p class="text-3xl font-black text-emerald-400 leading-none">{score}<span class="text-lg text-slate-500">/{target}</span></p>
         </div>
       </div>
     </div>
@@ -133,22 +104,22 @@
                   <p class="text-sm font-semibold text-slate-700 mb-1 flex items-center gap-2"><span class="w-2 h-2 rounded-full bg-red-500 block shrink-0"></span> Crash = Game Over.</p>
                   <p class="text-sm font-semibold text-slate-700 flex items-center gap-2"><span class="w-2 h-2 rounded-full bg-blue-500 block shrink-0"></span> Use Spacebar to swap lights.</p>
                 </div>
-                <button onclick={() => handleOverlayAction()} class="btn btn-primary btn-block text-lg">START GAME</button>
+                <button onclick={() => controller.handleAction()} class="btn btn-primary btn-block text-lg">START GAME</button>
 
               {:else if gameState === 'GAME_OVER'}
                 <h2 class="text-5xl font-black mb-2 text-red-600">CRASH!</h2>
                 <p class="text-slate-600 mb-8 font-medium">You scored {score} points and reached Level {currentLevel}.</p>
-                <button onclick={() => handleOverlayAction()} class="btn btn-error btn-block text-lg">TRY AGAIN</button>
+                <button onclick={() => controller.handleAction()} class="btn btn-error btn-block text-lg">TRY AGAIN</button>
 
               {:else if gameState === 'LEVEL_UP'}
                 <h2 class="text-5xl font-black mb-2 text-blue-600">LEVEL {currentLevel}</h2>
                 <p class="text-slate-600 mb-8 font-medium">Speed and traffic volume increased. Get ready!</p>
-                <button onclick={() => handleOverlayAction()} class="btn btn-primary btn-block text-lg">CONTINUE</button>
+                <button onclick={() => controller.handleAction()} class="btn btn-primary btn-block text-lg">CONTINUE</button>
 
               {:else if gameState === 'VICTORY'}
                 <h2 class="text-5xl font-black mb-2 text-emerald-500">CITY SAVED!</h2>
                 <p class="text-slate-600 mb-8 font-medium">You are a master Traffic Commander!</p>
-                <button onclick={() => handleOverlayAction()} class="btn btn-success btn-block text-lg">PLAY AGAIN</button>
+                <button onclick={() => controller.handleAction()} class="btn btn-success btn-block text-lg">PLAY AGAIN</button>
               {/if}
             </div>
           </div>
@@ -158,7 +129,7 @@
 
     <!-- Controls -->
     <div class="bg-white p-6 border-t border-slate-200 flex justify-center">
-      <button onclick={() => handleLightSwap()} disabled={gameState !== 'PLAYING'} class="btn btn-neutral btn-wide text-lg flex items-center gap-3">
+      <button onclick={() => { if (controller) controller.requestLightSwap(); }} disabled={gameState !== 'PLAYING'} class="btn btn-neutral btn-wide text-lg flex items-center gap-3">
         <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3 4 7l4 4"/><path d="M4 7h16"/><path d="m16 21 4-4-4-4"/><path d="M20 17H4"/></svg>
         SWAP LIGHTS (SPACE)
       </button>
@@ -166,4 +137,4 @@
   </div>
 </div>
 
-<svelte:window onkeydown={(e) => { if (e.code === 'Space') { e.preventDefault(); handleLightSwap(); } }} />
+<svelte:window onkeydown={(e) => { if (e.code === 'Space') { e.preventDefault(); if (controller) controller.requestLightSwap(); } }} />

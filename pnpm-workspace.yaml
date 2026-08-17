@@ -1,5 +1,6 @@
 allowBuilds:
   esbuild: true
   "@tailwindcss/oxide": true
-patchedDependencies:
-  cookie@0.6.0: patches/cookie@0.6.0.patch
+
+overrides:
+  cookie: 0.7.0
